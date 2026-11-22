@@ -17,7 +17,7 @@ from aiogram.types import (
 # ---------------- CONFIG ----------------
 
 BOT_TOKEN = "9222505585:AAHOySY_3xAC7xw1B_sovNzEA8-vb7ODWaA"
-ADMIN_IDS = {7595104128}
+ADMIN_IDS = {7595104128}  # এখানে আপনার টেলিগ্রাম আইডি দেওয়া আছে
 DATA_FILE = Path("data.json")
 
 BOT_USERNAME = "Expose_Movie_Bot"
@@ -28,6 +28,9 @@ if not BOT_TOKEN:
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+upload_buffers = {}
+buffer_locks = {}
 
 # ---------------- JSON DATABASE ----------------
 
@@ -86,8 +89,6 @@ def user_display_name(user):
 
 
 def get_file_info(message):
-    """Return a normalized file record for supported Telegram messages."""
-
     if message.document:
         item = message.document
         return {
@@ -200,8 +201,6 @@ async def schedule_deletion(chat_id, message_id):
 
 
 async def deletion_worker():
-    """Persistent queue: pending deletions survive bot restarts."""
-
     while True:
         try:
             async with db_lock:
@@ -258,29 +257,16 @@ async def start_handler(message: Message):
 
     await message.answer(
         "👋 স্বাগতম!\n\n"
-        "📤 আমাকে এক বা একাধিক ফাইল পাঠান।\n"
-        "সব ফাইল পাঠানো হলে Create Link বাটনে চাপ দিন।\n\n"
-        "🔗 আপনার ফাইলের শেয়ার লিংক তৈরি হবে।\n"
-        "⏳ বট থেকে পাঠানো ফাইল ও তথ্য ১০ মিনিট পর মুছে যাবে।\n\n"
-        "সাহায্য: /help"
+        "🔗 এই বট থেকে শুধুমাত্র অ্যাডমিনরা ফাইল শেয়ার লিংক তৈরি করতে পারে।"
     )
 
 
 @dp.message(Command("help"))
 async def help_handler(message: Message):
-    await message.answer(
-        "📌 ব্যবহারবিধি:\n\n"
-        "1. এক বা একাধিক ফাইল পাঠান।\n"
-        "2. Create Link বাটনে চাপ দিন।\n"
-        "3. তৈরি হওয়া লিংক অন্যদের দিন।\n"
-        "4. লিংক খুললে বট ফাইল পাঠাবে।\n\n"
-        "/done - লিংক তৈরি\n"
-        "/cancel - আপলোড বাতিল\n"
-        "/admin - Admin Panel (শুধু অ্যাডমিন)"
-    )
+    await message.answer("📌 এই বটটি দিয়ে শুধু অ্যাডমিনরা ফাইল আপলোড ও লিংক তৈরি করতে পারে।")
 
 
-# ---------------- RECEIVE FILES ----------------
+# ---------------- RECEIVE FILES (ADMIN ONLY) ----------------
 
 @dp.message(
     F.photo
@@ -292,6 +278,11 @@ async def help_handler(message: Message):
     | F.sticker
 )
 async def receive_file(message: Message):
+    # শুধুমাত্র অ্যাডমিন চেক
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔ দুঃখিত! এই বটে শুধুমাত্র অ্যাডমিনরাই ফাইল আপলোড করতে এবং লিংক তৈরি করতে পারবে।")
+        return
+
     item = get_file_info(message)
 
     if not item:
@@ -303,18 +294,39 @@ async def receive_file(message: Message):
     item["uploader_id"] = message.from_user.id
     item["upload_date"] = iso_now()
 
+    if user_id not in buffer_locks:
+        buffer_locks[user_id] = asyncio.Lock()
+
+    async with buffer_locks[user_id]:
+        upload_buffers.setdefault(user_id, [])
+        upload_buffers[user_id].append(item)
+        
+        if len(upload_buffers[user_id]) == 1:
+            asyncio.create_task(process_batch_upload(message, user_id))
+
+
+async def process_batch_upload(message: Message, user_id: str):
+    await asyncio.sleep(1.5)
+
+    async with buffer_locks[user_id]:
+        items = upload_buffers.pop(user_id, [])
+
+    if not items:
+        return
+
     async with db_lock:
         data = load_db()
         data["pending"].setdefault(user_id, [])
-        data["pending"][user_id].append(item)
-        count = len(data["pending"][user_id])
+        data["pending"][user_id].extend(items)
+        total_count = len(data["pending"][user_id])
         save_db(data)
 
+    file_names_preview = "\n".join([f"📁 {i['filename']} ({readable_size(i['size'])})" for i in items])
+    
     await message.answer(
-        f"✅ ফাইল গ্রহণ করা হয়েছে!\n"
-        f"📁 {item['filename']}\n"
-        f"📦 {readable_size(item['size'])}\n\n"
-        f"মোট ফাইল: {count}\n"
+        f"✅ সফলভাবে {len(items)}টি ফাইল গ্রহণ করা হয়েছে!\n\n"
+        f"{file_names_preview}\n\n"
+        f"📦 মোট ফাইল: {total_count}\n"
         f"আরও ফাইল পাঠাতে পারেন। সব শেষ হলে Create Link চাপুন।",
         reply_markup=create_keyboard(),
     )
@@ -323,6 +335,10 @@ async def receive_file(message: Message):
 # ---------------- CREATE SHARE LINK ----------------
 
 async def create_link_for_user(user_id: int, target_message: Message):
+    if user_id not in ADMIN_IDS:
+        await target_message.answer("⛔ আপনার লিংক তৈরি করার অনুমতি নেই।")
+        return
+
     key = str(user_id)
 
     async with db_lock:
@@ -359,6 +375,9 @@ async def create_link_for_user(user_id: int, target_message: Message):
 
 @dp.callback_query(F.data == "create_link")
 async def create_link_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("⛔ অনুমতি নেই!", show_alert=True)
+        return
     await callback.answer()
     await create_link_for_user(
         callback.from_user.id,
@@ -368,6 +387,9 @@ async def create_link_callback(callback: CallbackQuery):
 
 @dp.message(Command("done"))
 async def done_handler(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔ আপনার এই কমান্ড ব্যবহারের অনুমতি নেই।")
+        return
     await create_link_for_user(
         message.from_user.id,
         message
@@ -381,6 +403,9 @@ async def cancel_callback(callback: CallbackQuery):
         data["pending"].pop(str(callback.from_user.id), None)
         save_db(data)
 
+    async with buffer_locks.setdefault(str(callback.from_user.id), asyncio.Lock()):
+        upload_buffers.pop(str(callback.from_user.id), None)
+
     await callback.answer("আপলোড বাতিল করা হয়েছে।")
     await callback.message.answer("❌ আপনার অপেক্ষমাণ ফাইলগুলো বাতিল হয়েছে।")
 
@@ -391,6 +416,9 @@ async def cancel_handler(message: Message):
         data = load_db()
         data["pending"].pop(str(message.from_user.id), None)
         save_db(data)
+
+    async with buffer_locks.setdefault(str(message.from_user.id), asyncio.Lock()):
+        upload_buffers.pop(str(message.from_user.id), None)
 
     await message.answer("❌ আপনার অপেক্ষমাণ ফাইলগুলো বাতিল হয়েছে।")
 
@@ -426,45 +454,32 @@ async def send_one_file(chat_id, item, link_data, link_id):
     file_id = item["file_id"]
 
     if kind == "photo":
-        sent = await bot.send_photo(
-            chat_id, file_id, caption=caption
-        )
+        sent = await bot.send_photo(chat_id, file_id, caption=caption)
         await schedule_deletion(chat_id, sent.message_id)
 
     elif kind == "video":
-        sent = await bot.send_video(
-            chat_id, file_id, caption=caption
-        )
+        sent = await bot.send_video(chat_id, file_id, caption=caption)
         await schedule_deletion(chat_id, sent.message_id)
 
     elif kind == "document":
-        sent = await bot.send_document(
-            chat_id, file_id, caption=caption
-        )
+        sent = await bot.send_document(chat_id, file_id, caption=caption)
         await schedule_deletion(chat_id, sent.message_id)
 
     elif kind == "audio":
-        sent = await bot.send_audio(
-            chat_id, file_id, caption=caption
-        )
+        sent = await bot.send_audio(chat_id, file_id, caption=caption)
         await schedule_deletion(chat_id, sent.message_id)
 
     elif kind == "voice":
-        sent = await bot.send_voice(
-            chat_id, file_id, caption=caption
-        )
+        sent = await bot.send_voice(chat_id, file_id, caption=caption)
         await schedule_deletion(chat_id, sent.message_id)
 
     elif kind == "animation":
-        sent = await bot.send_animation(
-            chat_id, file_id, caption=caption
-        )
+        sent = await bot.send_animation(chat_id, file_id, caption=caption)
         await schedule_deletion(chat_id, sent.message_id)
 
     elif kind == "sticker":
         sent = await bot.send_sticker(chat_id, file_id)
         await schedule_deletion(chat_id, sent.message_id)
-
         info = await bot.send_message(chat_id, caption)
         await schedule_deletion(chat_id, info.message_id)
 
