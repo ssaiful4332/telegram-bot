@@ -18,12 +18,7 @@ from aiogram.types import (
 
 BOT_TOKEN = "9222505585:AAHOySY_3xAC7xw1B_sovNzEA8-vb7ODWaA"
 ADMIN_IDS = {7595104128}
-DATA_FILE = Path(
-    os.getenv(
-        "DATA_FILE",
-        "/home/Saifuliy/telegram_file_sharing_bot/data.json"
-    )
-)
+DATA_FILE = Path("data.json")
 
 BOT_USERNAME = "Expose_Movie_Bot"
 AUTO_DELETE_SECONDS = 10 * 60
