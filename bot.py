@@ -17,7 +17,7 @@ from aiogram.types import (
 # ---------------- CONFIG ----------------
 
 BOT_TOKEN = "9222505585:AAHOySY_3xAC7xw1B_sovNzEA8-vb7ODWaA"
-ADMIN_IDS = {7595104128}  # এখানে আপনার টেলিগ্রাম আইডি দেওয়া আছে
+ADMIN_IDS = {7595104128}
 DATA_FILE = Path("data.json")
 
 BOT_USERNAME = "Expose_Movie_Bot"
@@ -266,7 +266,7 @@ async def help_handler(message: Message):
     await message.answer("📌 এই বটটি দিয়ে শুধু অ্যাডমিনরা ফাইল আপলোড ও লিংক তৈরি করতে পারে।")
 
 
-# ---------------- RECEIVE FILES (ADMIN ONLY) ----------------
+# ---------------- RECEIVE FILES (STRICT ADMIN CHECK) ----------------
 
 @dp.message(
     F.photo
@@ -278,7 +278,6 @@ async def help_handler(message: Message):
     | F.sticker
 )
 async def receive_file(message: Message):
-    # শুধুমাত্র অ্যাডমিন চেক
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("⛔ দুঃখিত! এই বটে শুধুমাত্র অ্যাডমিনরাই ফাইল আপলোড করতে এবং লিংক তৈরি করতে পারবে।")
         return
