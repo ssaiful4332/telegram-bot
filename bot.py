@@ -39,7 +39,7 @@ db_lock = asyncio.Lock()
 
 def load_db():
     if not DATA_FILE.exists():
-        return {"links": {}, "pending": {}, "deletions": []}
+        return {"links": {}, "pending": {}, "deletions": [], "users": []}
 
     try:
         with DATA_FILE.open("r", encoding="utf-8") as f:
@@ -50,6 +50,7 @@ def load_db():
     data.setdefault("links", {})
     data.setdefault("pending", {})
     data.setdefault("deletions", [])
+    data.setdefault("users", [])
     return data
 
 
@@ -244,10 +245,19 @@ async def deletion_worker():
         await asyncio.sleep(5)
 
 
-# ---------------- START / HELP ----------------
+# ---------------- START / HELP / STATS ----------------
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
+    user_id = message.from_user.id
+    
+    # নতুন ইউজার হলে ডাটাবেসে সেভ করব
+    async with db_lock:
+        data = load_db()
+        if user_id not in data["users"]:
+            data["users"].append(user_id)
+            save_db(data)
+
     args = message.text.split(maxsplit=1)
 
     if len(args) > 1 and args[1].startswith("file_"):
@@ -255,15 +265,43 @@ async def start_handler(message: Message):
         await deliver_shared_link(message, link_id)
         return
 
+    if user_id in ADMIN_IDS:
+        await message.answer(
+            "👑 স্বাগতম অ্যাডমিন!\n\n"
+            "📤 ফাইল পাঠিয়ে লিংক তৈরি করুন।\n"
+            "📊 মোট ব্যবহারকারী দেখতে /stats কমান্ড দিন।"
+        )
+    else:
+        await message.answer(
+            "👋 স্বাগতম!\n\n"
+            "🔗 এই বট থেকে শুধুমাত্র ফাইল বা মুভি দেখতে পারবেন।"
+        )
+
+
+@dp.message(Command("stats"))
+async def stats_handler(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔ এই কমান্ডটি শুধু অ্যাডমিনের জন্য।")
+        return
+
+    async with db_lock:
+        data = load_db()
+        total_users = len(data.get("users", []))
+        total_links = len(data.get("links", {}))
+
     await message.answer(
-        "👋 স্বাগতম!\n\n"
-        "🔗 এই বট থেকে শুধুমাত্র অ্যাডমিনরা ফাইল শেয়ার লিংক তৈরি করতে পারে।"
+        "📊 **Bot Statistics:**\n\n"
+        f"👥 মোট মেম্বার/ইউজার: {total_users} জন\n"
+        f"🔗 মোট তৈরি লিংক: {total_links}টি"
     )
 
 
 @dp.message(Command("help"))
 async def help_handler(message: Message):
-    await message.answer("📌 এই বটটি দিয়ে শুধু অ্যাডমিনরা ফাইল আপলোড ও লিংক তৈরি করতে পারে।")
+    if message.from_user.id in ADMIN_IDS:
+        await message.answer("📌 অ্যাডমিন কমান্ডসমূহ:\n/admin - প্যানেল দেখুন\n/stats - মোট ইউজার দেখুন")
+    else:
+        await message.answer("📌 এই বট দিয়ে শেয়ারকৃত ফাইল বা মুভি দেখা যায়।")
 
 
 # ---------------- RECEIVE FILES (STRICT ADMIN CHECK) ----------------
@@ -489,9 +527,7 @@ async def deliver_shared_link(message: Message, link_id: str):
         link_data = data["links"].get(link_id)
 
         if not link_data:
-            await message.answer(
-                "❌ এই লিংকটি পাওয়া যায়নি অথবা এটি সঠিক নয়।"
-            )
+            await message.answer(ف"❌ এই লিংকটি পাওয়া যায়নি অথবা এটি সঠিক নয়।")
             return
 
         link_data["views"] = link_data.get("views", 0) + 1
@@ -535,6 +571,7 @@ async def admin_handler(message: Message):
     async with db_lock:
         data = load_db()
         links = data["links"]
+        total_users = len(data.get("users", []))
 
         total_links = len(links)
         total_files = sum(
@@ -554,6 +591,7 @@ async def admin_handler(message: Message):
         "╔════════════════════╗\n"
         "       👑 ADMIN PANEL\n"
         "╚════════════════════╝\n\n"
+        f"👥 Total Users: {total_users}\n"
         f"🔗 Total Links: {total_links}\n"
         f"📁 Total Files: {total_files}\n"
         f"👁 Total Link Opens: {total_views}\n\n"
