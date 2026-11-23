@@ -251,7 +251,6 @@ async def deletion_worker():
 async def start_handler(message: Message):
     user_id = message.from_user.id
     
-    # নতুন ইউজার হলে ডাটাবেসে সেভ করব
     async with db_lock:
         data = load_db()
         if user_id not in data["users"]:
@@ -527,7 +526,7 @@ async def deliver_shared_link(message: Message, link_id: str):
         link_data = data["links"].get(link_id)
 
         if not link_data:
-            await message.answer(ف"❌ এই লিংকটি পাওয়া যায়নি অথবা এটি সঠিক নয়।")
+            await message.answer("❌ এই লিংকটি পাওয়া যায়নি অথবা এটি সঠিক নয়।")
             return
 
         link_data["views"] = link_data.get("views", 0) + 1
